@@ -17,15 +17,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let reader = BufReader::new(fin);
         serde_json::from_reader(reader)?
     };
-    let mut data = &root;
-
-    let mut path = vec![0];
-    let mut fields = get_fields(data);
+    let mut data = vec![&root];
+    let mut pos = vec![0];
+    let mut fields = get_fields(data.last().unwrap());
 
     let stdin = std::io::stdin();
     let mut stdout = HideCursor::from(std::io::stdout().into_raw_mode()?);
 
-    write_fields(&mut stdout, &fields, 0)?;
+    write_fields(&mut stdout, &fields, *pos.last().unwrap())?;
     for evt in stdin.events() {
         let key = match evt? {
             Event::Key(key) => key,
@@ -34,25 +33,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match key {
             Key::Esc | Key::Char('q') => break,
             Key::Char('j') => {
-                let idx = path.last_mut().unwrap();
+                let idx = pos.last_mut().unwrap();
                 if *idx + 1 < fields.len() {
                     *idx += 1;
                 }
             }
             Key::Char('k') => {
-                let idx = path.last_mut().unwrap();
+                let idx = pos.last_mut().unwrap();
                 if *idx > 0 {
                     *idx -= 1;
                 }
             }
+            Key::Char('h') => {
+                if data.len() > 1 {
+                    data.pop();
+                    pos.pop();
+                    fields = get_fields(data.last().unwrap());
+                }
+            }
             Key::Char('l') => {
-                data = descend(data, *path.last().unwrap());
-                fields = get_fields(data);
-                path.push(0);
+                data.push(descend(data.last().unwrap(), *pos.last().unwrap()));
+                fields = get_fields(data.last().unwrap());
+                pos.push(0);
             }
             _ => continue,
         };
-        write_fields(&mut stdout, &fields, *path.last().unwrap())?;
+        write_fields(&mut stdout, &fields, *pos.last().unwrap())?;
     }
 
     // Restore the cursor and then exit.
