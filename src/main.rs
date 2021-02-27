@@ -17,20 +17,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let reader = BufReader::new(fin);
         serde_json::from_reader(reader)?
     };
+    let mut path = vec![0];
+    let fields = get_fields(&data);
+
     let stdin = std::io::stdin();
     let mut stdout = HideCursor::from(std::io::stdout().into_raw_mode()?);
 
-    write_keys(&mut stdout, &data, 0)?;
+    write_fields(&mut stdout, &fields, 0)?;
     for evt in stdin.events() {
         match evt? {
             Event::Key(key) => {
                 match key {
-                    Key::Esc => break,
-                    _ => {}
+                    Key::Esc | Key::Char('q') => break,
+                    Key::Char('j') => {
+                        let idx = path.last_mut().unwrap();
+                        if *idx + 1 < fields.len() {
+                            *idx += 1;
+                        }
+                    }
+                    Key::Char('k') => {
+                        let idx = path.last_mut().unwrap();
+                        if *idx > 0 {
+                            *idx -= 1;
+                        }
+                    }
+                    _ => continue,
                 };
             }
-            _ => {}
+            _ => continue,
         }
+        write_fields(&mut stdout, &fields, *path.last().unwrap())?;
     }
 
     // Restore the cursor and then exit.
@@ -38,19 +54,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn write_keys(
-    stdout: &mut RawTerminal<Stdout>,
-    v: &Value,
-    highlighted: usize,
-) -> std::io::Result<()> {
-    write!(stdout, "{}{}", termion::clear::All, Goto(1, 1))?;
-    let keys: Vec<String> = match v {
+fn get_fields(v: &Value) -> Vec<String> {
+    match v {
         Value::Array(_) | Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
             vec![]
         }
         Value::Object(ref obj) => obj.keys().cloned().collect(),
-    };
-    for (i, key) in keys.iter().enumerate() {
+    }
+}
+
+fn write_fields(
+    stdout: &mut RawTerminal<Stdout>,
+    fields: &[String],
+    highlighted: usize,
+) -> std::io::Result<()> {
+    write!(stdout, "{}{}", termion::clear::All, Goto(1, 1))?;
+    for (i, key) in fields.iter().enumerate() {
         write!(stdout, "{}", Goto(1, 1 + i as u16))?;
         if i == highlighted {
             write!(
