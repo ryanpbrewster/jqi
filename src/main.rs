@@ -27,32 +27,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     write_fields(&mut stdout, &fields, 0)?;
     for evt in stdin.events() {
-        match evt? {
-            Event::Key(key) => {
-                match key {
-                    Key::Esc | Key::Char('q') => break,
-                    Key::Char('j') => {
-                        let idx = path.last_mut().unwrap();
-                        if *idx + 1 < fields.len() {
-                            *idx += 1;
-                        }
-                    }
-                    Key::Char('k') => {
-                        let idx = path.last_mut().unwrap();
-                        if *idx > 0 {
-                            *idx -= 1;
-                        }
-                    }
-                    Key::Char('l') => {
-                        data = descend(data, *path.last().unwrap());
-                        fields = get_fields(data);
-                        path.push(0);
-                    }
-                    _ => continue,
-                };
+        let key = match evt? {
+            Event::Key(key) => key,
+            _ => continue,
+        };
+        match key {
+            Key::Esc | Key::Char('q') => break,
+            Key::Char('j') => {
+                let idx = path.last_mut().unwrap();
+                if *idx + 1 < fields.len() {
+                    *idx += 1;
+                }
+            }
+            Key::Char('k') => {
+                let idx = path.last_mut().unwrap();
+                if *idx > 0 {
+                    *idx -= 1;
+                }
+            }
+            Key::Char('l') => {
+                data = descend(data, *path.last().unwrap());
+                fields = get_fields(data);
+                path.push(0);
             }
             _ => continue,
-        }
+        };
         write_fields(&mut stdout, &fields, *path.last().unwrap())?;
     }
 
