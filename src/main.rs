@@ -1,11 +1,14 @@
 use serde_json::Value;
 use std::io::BufReader;
+use std::io::Stdout;
 use std::io::Write;
 use std::path::PathBuf;
 use structopt::StructOpt;
+use termion::cursor::{Goto, HideCursor};
 use termion::event::{Event, Key};
-use termion::input::{MouseTerminal, TermRead};
-use termion::{cursor::Goto, raw::IntoRawMode};
+use termion::input::TermRead;
+use termion::raw::{IntoRawMode, RawTerminal};
+use termion::style;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::from_args();
@@ -15,10 +18,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::from_reader(reader)?
     };
     let stdin = std::io::stdin();
-    let mut stdout = MouseTerminal::from(std::io::stdout().into_raw_mode()?);
+    let mut stdout = HideCursor::from(std::io::stdout().into_raw_mode()?);
 
-    write!(stdout, "{}", termion::clear::All)?;
-    stdout.flush()?;
+    write_keys(&mut stdout, &data, 0)?;
     for evt in stdin.events() {
         match evt? {
             Event::Key(key) => {
@@ -29,21 +31,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => {}
         }
-        write!(stdout, "{}{}", termion::clear::All, Goto(1, 1))?;
-        let keys: Vec<String> = match data {
-            Value::Array(_)
-            | Value::Null
-            | Value::Bool(_)
-            | Value::Number(_)
-            | Value::String(_) => vec![],
-            Value::Object(ref obj) => obj.keys().cloned().collect(),
-        };
-        for (i, key) in keys.iter().enumerate() {
-            write!(stdout, "{}{}\n", Goto(1, 2 + i as u16), key)?;
-        }
-        stdout.flush()?;
     }
 
+    // Restore the cursor and then exit.
+    write!(stdout, "{}{}", termion::clear::All, Goto(1, 1))?;
+    Ok(())
+}
+
+fn write_keys(
+    stdout: &mut RawTerminal<Stdout>,
+    v: &Value,
+    highlighted: usize,
+) -> std::io::Result<()> {
+    write!(stdout, "{}{}", termion::clear::All, Goto(1, 1))?;
+    let keys: Vec<String> = match v {
+        Value::Array(_) | Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
+            vec![]
+        }
+        Value::Object(ref obj) => obj.keys().cloned().collect(),
+    };
+    for (i, key) in keys.iter().enumerate() {
+        write!(stdout, "{}", Goto(1, 1 + i as u16))?;
+        if i == highlighted {
+            write!(
+                stdout,
+                "{}{}{}",
+                style::Bold,
+                style::Italic,
+                style::Underline
+            )?;
+        }
+        write!(stdout, "{}{}", key, style::Reset)?;
+    }
+    stdout.flush()?;
     Ok(())
 }
 
