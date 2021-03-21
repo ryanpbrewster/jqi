@@ -1,8 +1,8 @@
 use serde_json::Value;
-use std::io::BufReader;
 use std::io::Stdout;
 use std::io::Write;
 use std::path::PathBuf;
+use std::{fmt::Display, io::BufReader};
 use structopt::StructOpt;
 use termion::cursor::{Goto, HideCursor};
 use termion::event::{Event, Key};
@@ -17,14 +17,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let reader = BufReader::new(fin);
         serde_json::from_reader(reader)?
     };
-    let mut data = vec![&root];
-    let mut pos = vec![0];
-    let mut fields = get_fields(data.last().unwrap());
+    let mut data = NonEmptyVec::new(&root);
+    let mut pos = NonEmptyVec::new(0);
 
     let stdin = std::io::stdin();
     let mut stdout = HideCursor::from(std::io::stdout().into_raw_mode()?);
 
-    write_fields(&mut stdout, &fields, *pos.last().unwrap())?;
+    write_data(&mut stdout, data.last(), *pos.last())?;
     for evt in stdin.events() {
         let key = match evt? {
             Event::Key(key) => key,
@@ -33,34 +32,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match key {
             Key::Esc | Key::Char('q') => break,
             Key::Char('j') => {
-                let idx = pos.last_mut().unwrap();
-                if *idx + 1 < fields.len() {
+                let idx = pos.last_mut();
+                if *idx + 1 < field_count(data.last()) {
                     *idx += 1;
                 }
             }
             Key::Char('k') => {
-                let idx = pos.last_mut().unwrap();
+                let idx = pos.last_mut();
                 if *idx > 0 {
                     *idx -= 1;
                 }
             }
             Key::Char('h') => {
-                if data.len() > 1 {
-                    data.pop();
-                    pos.pop();
-                    fields = get_fields(data.last().unwrap());
-                }
+                data.pop();
+                pos.pop();
             }
             Key::Char('l') => {
-                if let Some(child) = descend(data.last().unwrap(), *pos.last().unwrap()) {
+                if let Some(child) = descend(data.last(), *pos.last()) {
                     data.push(child);
-                    fields = get_fields(data.last().unwrap());
                     pos.push(0);
                 }
             }
             _ => continue,
         };
-        write_fields(&mut stdout, &fields, *pos.last().unwrap())?;
+        write_data(&mut stdout, data.last(), *pos.last())?;
     }
 
     // Restore the cursor and then exit.
@@ -68,14 +63,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn get_fields(v: &Value) -> Vec<String> {
+fn field_count(v: &Value) -> usize {
     match v {
-        Value::Null => vec!["null".to_owned()],
-        Value::Bool(b) => vec![b.to_string()],
-        Value::Number(x) => vec![x.to_string()],
-        Value::String(s) => vec![s.to_owned()],
-        Value::Array(ref vs) => (0..vs.len()).map(|i| i.to_string()).collect(),
-        Value::Object(ref obj) => obj.keys().cloned().collect(),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => 0,
+        Value::Array(ref vs) => vs.len(),
+        Value::Object(ref obj) => obj.len(),
     }
 }
 
@@ -87,13 +79,30 @@ fn descend(v: &Value, idx: usize) -> Option<&Value> {
     }
 }
 
-fn write_fields(
+fn write_data(
     stdout: &mut RawTerminal<Stdout>,
-    fields: &[String],
+    value: &Value,
     highlighted: usize,
 ) -> std::io::Result<()> {
     write!(stdout, "{}{}", termion::clear::All, Goto(1, 1))?;
-    for (i, key) in fields.iter().enumerate() {
+    match value {
+        Value::Null => write!(stdout, "null")?,
+        Value::Bool(b) => write!(stdout, "{}", b)?,
+        Value::Number(x) => write!(stdout, "{}", x)?,
+        Value::String(s) => write!(stdout, "{}", s)?,
+        Value::Array(ref vs) => write_fields(stdout, 0..vs.len(), highlighted)?,
+        Value::Object(ref obj) => write_fields(stdout, obj.keys(), highlighted)?,
+    }
+    stdout.flush()?;
+    Ok(())
+}
+
+fn write_fields<T: Display>(
+    stdout: &mut RawTerminal<Stdout>,
+    fields: impl Iterator<Item = T>,
+    highlighted: usize,
+) -> std::io::Result<()> {
+    for (i, name) in fields.enumerate() {
         write!(stdout, "{}", Goto(1, 1 + i as u16))?;
         if i == highlighted {
             write!(
@@ -104,9 +113,8 @@ fn write_fields(
                 style::Underline
             )?;
         }
-        write!(stdout, "{}{}", key, style::Reset)?;
+        write!(stdout, "{}{}", name, style::Reset)?;
     }
-    stdout.flush()?;
     Ok(())
 }
 
@@ -114,4 +122,29 @@ fn write_fields(
 struct Args {
     #[structopt(parse(from_os_str))]
     input: PathBuf,
+}
+
+struct NonEmptyVec<T>(Vec<T>);
+
+impl<T> NonEmptyVec<T> {
+    fn new(singleton: T) -> Self {
+        Self(vec![singleton])
+    }
+
+    fn push(&mut self, item: T) {
+        self.0.push(item);
+    }
+    fn pop(&mut self) -> Option<T> {
+        if self.0.len() > 1 {
+            self.0.pop()
+        } else {
+            None
+        }
+    }
+    fn last(&self) -> &T {
+        self.0.last().unwrap()
+    }
+    fn last_mut(&mut self) -> &mut T {
+        self.0.last_mut().unwrap()
+    }
 }
