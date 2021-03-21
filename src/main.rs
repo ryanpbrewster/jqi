@@ -52,9 +52,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Key::Char('l') => {
-                data.push(descend(data.last().unwrap(), *pos.last().unwrap()));
-                fields = get_fields(data.last().unwrap());
-                pos.push(0);
+                if let Some(child) = descend(data.last().unwrap(), *pos.last().unwrap()) {
+                    data.push(child);
+                    fields = get_fields(data.last().unwrap());
+                    pos.push(0);
+                }
             }
             _ => continue,
         };
@@ -68,23 +70,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn get_fields(v: &Value) -> Vec<String> {
     match v {
-        Value::Array(_) | Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
-            vec![]
-        }
+        Value::Null => vec!["null".to_owned()],
+        Value::Bool(b) => vec![b.to_string()],
+        Value::Number(x) => vec![x.to_string()],
+        Value::String(s) => vec![s.to_owned()],
+        Value::Array(ref vs) => (0..vs.len()).map(|i| i.to_string()).collect(),
         Value::Object(ref obj) => obj.keys().cloned().collect(),
     }
 }
 
-fn descend(v: &Value, idx: usize) -> &Value {
+fn descend(v: &Value, idx: usize) -> Option<&Value> {
     match v {
-        Value::Array(_) | Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => v,
-        Value::Object(ref obj) => {
-            let key = match obj.keys().nth(idx) {
-                None => return v,
-                Some(key) => key,
-            };
-            obj.get(key).unwrap_or(v)
-        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
+        Value::Array(ref vs) => vs.get(idx),
+        Value::Object(ref obj) => obj.keys().nth(idx).and_then(|key| obj.get(key)),
     }
 }
 
