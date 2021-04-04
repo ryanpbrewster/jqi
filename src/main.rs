@@ -1,7 +1,6 @@
 use serde_json::Value;
 use std::io::Stdout;
 use std::io::Write;
-use std::ops::Deref;
 use std::path::PathBuf;
 use std::{fmt::Display, io::BufReader};
 use structopt::StructOpt;
@@ -159,11 +158,17 @@ impl<'a> JsonPath<'a> {
     }
 
     /// An iterator over the field names on this path.
-    fn names(&self) -> impl Iterator<Item = &str> {
-        self.path.iter().filter_map(|(value, idx)| match value {
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
-            Value::Array(_) => Some("[i]"),
-            Value::Object(ref obj) => obj.keys().nth(*idx).map(|s: &String| s.deref()),
+    fn names(&self) -> impl Iterator<Item = &dyn Display> {
+        self.path.iter().filter_map(|(value, idx)| {
+            let name: Option<&dyn Display> = match value {
+                Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
+                Value::Array(_) => Some(idx),
+                Value::Object(ref obj) => obj.keys().nth(*idx).map(|s| {
+                    let s: &dyn Display = s;
+                    s
+                }),
+            };
+            name
         })
     }
 }
