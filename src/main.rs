@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::io::Stdout;
 use std::io::Write;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::{fmt::Display, io::BufReader};
 use structopt::StructOpt;
@@ -17,13 +18,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let reader = BufReader::new(fin);
         serde_json::from_reader(reader)?
     };
-    let mut data = NonEmptyVec::new(&root);
-    let mut pos = NonEmptyVec::new(0);
+    let mut pos = 0;
+    let mut path = JsonPath::new(&root);
 
     let stdin = std::io::stdin();
     let mut stdout = HideCursor::from(std::io::stdout().into_raw_mode()?);
 
-    write_data(&mut stdout, data.last(), *pos.last())?;
+    write_data(&mut stdout, &path, pos)?;
     for evt in stdin.events() {
         let key = match evt? {
             Event::Key(key) => key,
@@ -32,30 +33,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match key {
             Key::Esc | Key::Char('q') => break,
             Key::Char('j') => {
-                let idx = pos.last_mut();
-                if *idx + 1 < field_count(data.last()) {
-                    *idx += 1;
+                if pos + 1 < path.field_count() {
+                    pos += 1;
                 }
             }
             Key::Char('k') => {
-                let idx = pos.last_mut();
-                if *idx > 0 {
-                    *idx -= 1;
+                if pos > 0 {
+                    pos -= 1;
                 }
             }
             Key::Char('h') => {
-                data.pop();
-                pos.pop();
+                if let Some(prev) = path.pop() {
+                    pos = prev;
+                }
             }
             Key::Char('l') => {
-                if let Some(child) = descend(data.last(), *pos.last()) {
-                    data.push(child);
-                    pos.push(0);
+                if path.push(pos) {
+                    pos = 0;
                 }
             }
             _ => continue,
         };
-        write_data(&mut stdout, data.last(), *pos.last())?;
+        write_data(&mut stdout, &path, pos)?;
     }
 
     // Restore the cursor and then exit.
@@ -63,36 +62,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn field_count(v: &Value) -> usize {
-    match v {
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => 0,
-        Value::Array(ref vs) => vs.len(),
-        Value::Object(ref obj) => obj.len(),
-    }
-}
-
-fn descend(v: &Value, idx: usize) -> Option<&Value> {
-    match v {
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
-        Value::Array(ref vs) => vs.get(idx),
-        Value::Object(ref obj) => obj.keys().nth(idx).and_then(|key| obj.get(key)),
-    }
-}
-
 fn write_data(
     stdout: &mut RawTerminal<Stdout>,
-    value: &Value,
-    highlighted: usize,
+    path: &JsonPath,
+    pos: usize,
 ) -> std::io::Result<()> {
     write!(stdout, "{}{}", termion::clear::All, Goto(1, 1))?;
-    match value {
+    write!(stdout, "/")?;
+    for name in path.names() {
+        write!(stdout, "{}/", name)?;
+    }
+    write!(stdout, "{}", Goto(1, 3))?;
+    match path.cur {
         Value::Null => write!(stdout, "null")?,
         Value::Bool(b) => write!(stdout, "{}", b)?,
         Value::Number(x) => write!(stdout, "{}", x)?,
         Value::String(s) => write!(stdout, "{}", s)?,
-        Value::Array(ref vs) => write_fields(stdout, 0..vs.len(), highlighted)?,
-        Value::Object(ref obj) => write_fields(stdout, obj.keys(), highlighted)?,
+        Value::Array(ref vs) => write_fields(stdout, 0..vs.len(), pos)?,
+        Value::Object(ref obj) => write_fields(stdout, obj.keys(), pos)?,
     }
+
     stdout.flush()?;
     Ok(())
 }
@@ -103,7 +92,7 @@ fn write_fields<T: Display>(
     highlighted: usize,
 ) -> std::io::Result<()> {
     for (i, name) in fields.enumerate() {
-        write!(stdout, "{}", Goto(1, 1 + i as u16))?;
+        write!(stdout, "{}", Goto(1, 3 + i as u16))?;
         if i == highlighted {
             write!(
                 stdout,
@@ -124,27 +113,57 @@ struct Args {
     input: PathBuf,
 }
 
-struct NonEmptyVec<T>(Vec<T>);
-
-impl<T> NonEmptyVec<T> {
-    fn new(singleton: T) -> Self {
-        Self(vec![singleton])
-    }
-
-    fn push(&mut self, item: T) {
-        self.0.push(item);
-    }
-    fn pop(&mut self) -> Option<T> {
-        if self.0.len() > 1 {
-            self.0.pop()
-        } else {
-            None
+struct JsonPath<'a> {
+    path: Vec<(&'a Value, usize)>,
+    cur: &'a Value,
+}
+impl<'a> JsonPath<'a> {
+    fn new(root: &Value) -> JsonPath {
+        JsonPath {
+            path: Vec::new(),
+            cur: root,
         }
     }
-    fn last(&self) -> &T {
-        self.0.last().unwrap()
+
+    /// How many children does the current node have?
+    fn field_count(&self) -> usize {
+        match self.cur {
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => 0,
+            Value::Array(vs) => vs.len(),
+            Value::Object(ref obj) => obj.len(),
+        }
     }
-    fn last_mut(&mut self) -> &mut T {
-        self.0.last_mut().unwrap()
+
+    /// Descend down the `idx`-th child.
+    fn push(&mut self, idx: usize) -> bool {
+        let next = match self.cur {
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
+            Value::Array(ref vs) => vs.get(idx),
+            Value::Object(ref obj) => obj.keys().nth(idx).and_then(|key| obj.get(key)),
+        };
+        match next {
+            None => false,
+            Some(next) => {
+                self.path.push((self.cur, idx));
+                self.cur = next;
+                true
+            }
+        }
+    }
+
+    /// Back up one step, and return the index of the child we popped.
+    fn pop(&mut self) -> Option<usize> {
+        let (prev, idx) = self.path.pop()?;
+        self.cur = prev;
+        Some(idx)
+    }
+
+    /// An iterator over the field names on this path.
+    fn names(&self) -> impl Iterator<Item = &str> {
+        self.path.iter().filter_map(|(value, idx)| match value {
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
+            Value::Array(_) => Some("[i]"),
+            Value::Object(ref obj) => obj.keys().nth(*idx).map(|s: &String| s.deref()),
+        })
     }
 }
