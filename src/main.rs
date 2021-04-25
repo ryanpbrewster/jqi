@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Key::Char('h') => {
                 if let Some(prev) = path.pop() {
-                    pos = prev;
+                    pos = prev.index();
                 }
             }
             Key::Char('l') => {
@@ -67,9 +67,8 @@ fn write_data(
     pos: usize,
 ) -> std::io::Result<()> {
     write!(stdout, "{}{}", termion::clear::All, Goto(1, 1))?;
-    write!(stdout, "/")?;
     for name in path.names() {
-        write!(stdout, "{}/", name)?;
+        write!(stdout, "{}", name)?;
     }
     write!(stdout, "{}", Goto(1, 3))?;
     match path.cur {
@@ -113,7 +112,7 @@ struct Args {
 }
 
 struct JsonPath<'a> {
-    path: Vec<(&'a Value, usize)>,
+    path: Vec<(Segment, &'a Value)>,
     cur: &'a Value,
 }
 impl<'a> JsonPath<'a> {
@@ -137,13 +136,16 @@ impl<'a> JsonPath<'a> {
     fn push(&mut self, idx: usize) -> bool {
         let next = match self.cur {
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
-            Value::Array(ref vs) => vs.get(idx),
-            Value::Object(ref obj) => obj.keys().nth(idx).and_then(|key| obj.get(key)),
+            Value::Array(ref vs) => vs.get(idx).map(|v| (Segment::Index(idx), v)),
+            Value::Object(ref obj) => obj.keys().nth(idx).and_then(|key| {
+                obj.get(key)
+                    .map(|v| (Segment::Name(idx, key.to_owned()), v))
+            }),
         };
         match next {
             None => false,
-            Some(next) => {
-                self.path.push((self.cur, idx));
+            Some((segment, next)) => {
+                self.path.push((segment, self.cur));
                 self.cur = next;
                 true
             }
@@ -151,18 +153,35 @@ impl<'a> JsonPath<'a> {
     }
 
     /// Back up one step, and return the index of the child we popped.
-    fn pop(&mut self) -> Option<usize> {
-        let (prev, idx) = self.path.pop()?;
+    fn pop(&mut self) -> Option<Segment> {
+        let (segment, prev) = self.path.pop()?;
         self.cur = prev;
-        Some(idx)
+        Some(segment)
     }
 
     /// An iterator over the field names on this path.
-    fn names(&self) -> impl Iterator<Item = &dyn Display> {
-        self.path.iter().filter_map(|(value, idx)| match value {
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
-            Value::Array(_) => Some(idx as &dyn Display),
-            Value::Object(ref obj) => obj.keys().nth(*idx).map(|s| s as &dyn Display),
-        })
+    fn names(&self) -> impl Iterator<Item = &Segment> {
+        self.path.iter().map(|(segment, _)| segment)
+    }
+}
+
+enum Segment {
+    Name(usize, String),
+    Index(usize),
+}
+impl Segment {
+    fn index(&self) -> usize {
+        match *self {
+            Segment::Name(idx, _) => idx,
+            Segment::Index(idx) => idx,
+        }
+    }
+}
+impl Display for Segment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Segment::Name(_, name) => write!(f, ".{}", name),
+            Segment::Index(idx) => write!(f, "[{}]", idx),
+        }
     }
 }
